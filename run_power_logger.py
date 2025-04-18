@@ -3,8 +3,8 @@ import time
 import csv  # Import the csv module
 from datetime import datetime  # Import datetime for timestamps
 
-T_sleep = 1  # Sleep time in seconds (variable)
-ENABLE_LOGGING = True  # Hardcoded variable to enable/disable CSV logging (True to enable, False to disable)
+T_sleep = 1.0  # Sleep time in seconds (variable)
+ENABLE_LOGGING = False  # Hardcoded variable to enable/disable CSV logging (True to enable, False to disable)
 
 def get_battery_value(property_name):
     """

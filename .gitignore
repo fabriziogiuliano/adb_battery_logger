@@ -1,1 +1,4 @@
 *.csv
+adb
+platform-tools*
+iperf*

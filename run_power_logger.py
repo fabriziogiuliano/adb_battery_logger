@@ -1,295 +1,359 @@
 import subprocess
 import time
-import csv  # Import the csv module
-from datetime import datetime  # Import datetime for timestamps
-import re # Import regular expression module
+import csv
+from datetime import datetime
+import re
 
-T_sleep = 1.0  # Sleep time in seconds (variable)
-ENABLE_LOGGING = True  # Hardcoded variable to enable/disable CSV logging (True to enable, False to disable)
-ENABLE_DELTA_COLUMNS = False  # Flag to enable/disable delta columns in output (True to enable, False to disable)
+T_sleep = 1  # Sleep time in seconds (variable)
+ENABLE_LOGGING = True  # Enable/disable CSV logging
+ENABLE_DELTA_COLUMNS = False  # Enable/disable delta columns
+ENABLE_THERMAL_SENSORS = False # Enable/disable thermal sensor readings <--- NEW VARIABLE
+
+# Dictionary to control displayed columns (True to show, False to hide) for VIDEO OUTPUT
+DISPLAY_COLUMNS = {
+    'Timestamp': True,
+    'Current (mA)': True,
+    'ΔCurrent (mA)': ENABLE_DELTA_COLUMNS, # Controlled by ENABLE_DELTA_COLUMNS
+    'Avg Current (mA)': True,
+    'ΔAvg Current (mA)': ENABLE_DELTA_COLUMNS, # Controlled by ENABLE_DELTA_COLUMNS
+    'Voltage (mV)': True,
+    'ΔVoltage (mV)': ENABLE_DELTA_COLUMNS, # Controlled by ENABLE_DELTA_COLUMNS
+    'Power (W)': True,
+    'ΔPower (W)': ENABLE_DELTA_COLUMNS, # Controlled by ENABLE_DELTA_COLUMNS
+    'Capacity (%)': True,
+    'Battery Temp (°C)': True,
+    'Thermal Sensors': ENABLE_THERMAL_SENSORS # Master switch for thermal sensors display, controlled by ENABLE_THERMAL_SENSORS now
+}
+
 
 def get_battery_value(property_name):
-    """
-    Executes adb shell command to read battery property from sysfs.
-
-    Args:
-        property_name: The name of the battery property file in sysfs
-                       (e.g., 'current_now', 'voltage_now', 'capacity').
-
-    Returns:
-        str: The value read from the property file, or None if there's an error.
-    """
+    """Reads battery property from sysfs."""
     try:
         process = subprocess.run(
-            ["./adb", "shell", f"cat /sys/class/power_supply/battery/{property_name}"], # Using ./adb
-            capture_output=True,
-            text=True,
-            check=True  # Raise an exception for non-zero exit codes
+            ["./adb", "shell", f"cat /sys/class/power_supply/battery/{property_name}"],
+            capture_output=True, text=True, check=True
         )
-        output = process.stdout.strip()
-        return output
+        return process.stdout.strip()
     except subprocess.CalledProcessError as e:
-        print(f"Error reading {property_name}: ADB command failed with error code {e.returncode}")
-        print(f"Stderr: {e.stderr}")
+        print(f"Error reading {property_name}: ADB command failed: {e}")
         return None
     except FileNotFoundError:
-        print("Error: ./adb command not found. Make sure ADB is in the current directory and executable, or in your PATH.") # Updated error message for ./adb
+        print("Error: ./adb command not found.")
         return None
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
         return None
 
 def get_battery_temperature():
-    """
-    Reads battery temperature using `dumpsys battery | grep temp`.
-    Temperature is typically in tenths of a degree Celsius.
-    """
+    """Reads battery temperature using dumpsys battery."""
     try:
         process = subprocess.run(
             ["./adb", "shell", "dumpsys battery | grep temp"],
-            capture_output=True,
-            text=True,
-            check=True
+            capture_output=True, text=True, check=True
         )
         output = process.stdout.strip()
-        # Example output:   temperature: 280
-        parts = output.split(':') # Split by colon
+        parts = output.split(':')
         if len(parts) > 1:
-            temp_str = parts[1].strip() # Take the part after the colon and remove whitespace
             try:
-                temp_tenths_celsius = int(temp_str)
-                temp_celsius = temp_tenths_celsius / 10.0 # Convert to Celsius
-                return temp_celsius
+                return float(parts[1].strip()) / 10.0
             except ValueError:
-                print(f"Warning: Could not convert temperature value to float: {temp_str}")
+                print(f"Warning: Could not convert temperature value to float: {parts[1].strip()}")
                 return None
-        else:
-            print(f"Warning: Unexpected output format for temperature: {output}")
-            return None
-
+        return None
     except subprocess.CalledProcessError as e:
-        print(f"Error reading battery temperature: ADB command failed with error code {e.returncode}")
-        print(f"Stderr: {e.stderr}")
+        print(f"Error reading battery temp: ADB command failed: {e}")
         return None
     except FileNotFoundError:
-        print("Error: ./adb command not found for battery temperature. Make sure ADB is in the current directory and executable, or in your PATH.")
+        print("Error: ./adb command not found for battery temp.")
         return None
     except Exception as e:
-        print(f"An unexpected error occurred while reading battery temperature: {e}")
+        print(f"An unexpected error occurred reading battery temp: {e}")
         return None
 
 def get_device_model():
-    """
-    Retrieves the device model using `adb shell getprop ro.product.model`.
-    """
+    """Retrieves device model using adb shell getprop."""
     try:
         process = subprocess.run(
             ["./adb", "shell", "getprop ro.product.model"],
-            capture_output=True,
-            text=True,
-            check=True
+            capture_output=True, text=True, check=True
         )
-        model = process.stdout.strip()
-        return model
-    except subprocess.CalledProcessError as e:
-        print(f"Error getting device model: ADB command failed with error code {e.returncode}")
-        print(f"Stderr: {e.stderr}")
-        return "UNKNOWN_MODEL"
-    except FileNotFoundError:
-        print("Error: ./adb command not found for getting device model.")
-        return "UNKNOWN_MODEL"
-    except Exception as e:
-        print(f"An unexpected error occurred while getting device model: {e}")
+        return process.stdout.strip()
+    except Exception:
         return "UNKNOWN_MODEL"
 
 def get_device_serial():
-    """
-    Retrieves the device serial number using `adb get-serialno`.
-    """
+    """Retrieves device serial using adb get-serialno."""
     try:
         process = subprocess.run(
             ["./adb", "get-serialno"],
-            capture_output=True,
-            text=True,
-            check=True
+            capture_output=True, text=True, check=True
         )
-        serial = process.stdout.strip()
-        return serial
-    except subprocess.CalledProcessError as e:
-        print(f"Error getting device serial: ADB command failed with error code {e.returncode}")
-        print(f"Stderr: {e.stderr}")
-        return "UNKNOWN_SERIAL"
-    except FileNotFoundError:
-        print("Error: ./adb command not found for getting device serial.")
-        return "UNKNOWN_SERIAL"
-    except Exception as e:
-        print(f"An unexpected error occurred while getting device serial: {e}")
+        return process.stdout.strip()
+    except Exception:
         return "UNKNOWN_SERIAL"
 
 def sanitize_filename(filename):
-    """
-    Sanitizes a filename by replacing invalid characters with underscores.
-    """
-    return re.sub(r'[^\w\-_\.]', '_', filename) # Keep alphanumeric, underscore, hyphen, dot
+    """Sanitizes filename by replacing invalid chars."""
+    return re.sub(r'[^\w\-_\.]', '_', filename)
 
+def get_temperature_data():
+    """Executes adb shell dumpsys thermalservice and returns output."""
+    try:
+        process = subprocess.run(['./adb', 'shell', 'dumpsys', 'thermalservice'],
+                                   capture_output=True, text=True, check=True)
+        return process.stdout
+    except subprocess.CalledProcessError as e:
+        print(f"Error executing adb for thermalservice: {e}")
+        return None
+    except FileNotFoundError:
+        print("Error: 'adb' command not found for thermalservice.")
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred getting thermalservice data: {e}")
+        return None
+
+def parse_temperature_output(output):
+    """Parses dumpsys thermalservice output and extracts temperatures."""
+    temperatures = {}
+    if output:
+        lines = output.splitlines()
+        start_parsing_cached = False
+        start_parsing_current = False
+
+        for line in lines:
+            line = line.strip()
+            if line == "Cached temperatures:":
+                start_parsing_cached = True
+                continue
+            if line == "Current temperatures from HAL:":
+                start_parsing_current = True
+                start_parsing_cached = False
+                continue
+
+            start_parsing = start_parsing_current or start_parsing_cached
+
+            if start_parsing and line.startswith("Temperature{"):
+                match = re.search(r"mValue=([\d.]+),.*?mName=([^,]+)", line)
+                if match:
+                    value = float(match.group(1))
+                    name = match.group(2).strip()
+                    temperatures[name] = value
+            elif start_parsing and not line.startswith("Temperature{") and line != "":
+                start_parsing_cached = False
+                start_parsing_current = False
+    return temperatures
 
 if __name__ == "__main__":
-    print("-" * 160) # Increased separator width
-    print("Real-time Battery Monitoring Script with Temperature (Fixed-Width Output)") # Updated title
-    print("-" * 160)
+    print("-" * 200)
+    print("Real-time Battery and Thermal Monitoring Script (Fixed-Width Output)")
+    print("-" * 200)
     print(f"Polling Interval: {T_sleep:.2f} seconds")
     print(f"Logging to CSV:   {'Enabled' if ENABLE_LOGGING else 'Disabled'}")
-    print(f"Delta Columns:    {'Enabled' if ENABLE_DELTA_COLUMNS else 'Disabled'}") # Added delta columns status
-    print("-" * 160)
+    print(f"Delta Columns:    {'Enabled' if ENABLE_DELTA_COLUMNS else 'Disabled'}")
+    print(f"Thermal Sensors:  {'Enabled' if ENABLE_THERMAL_SENSORS else 'Disabled'}") # <--- PRINT THERMAL SENSOR STATUS
+    print("-" * 200)
     print("Press Ctrl+C to stop")
-    print("-" * 160)
+    print("-" * 200)
 
-    header_row = f"{'Timestamp':<23} | {'Current (mA)':>10} | "
-    if ENABLE_DELTA_COLUMNS:
-        header_row += f"{'ΔCurrent (mA)':>10} | "
-    header_row += f"{'Avg Current (mA)':>10} | "
-    if ENABLE_DELTA_COLUMNS:
-        header_row += f"{'ΔAvg Current (mA)':>12} | "
-    header_row += f"{'Voltage (mV)':>10} | "
-    if ENABLE_DELTA_COLUMNS:
-        header_row += f"{'ΔVoltage (mV)':>10} | "
-    header_row += f"{'Power (W)':>10} | "
-    if ENABLE_DELTA_COLUMNS:
-        header_row += f"{'ΔPower (W)':>10} | "
-    header_row += f"{'Capacity (%)':>8} | {'Temp (°C)':>8}"
-    print(header_row)
-    print("-" * 160)
+    video_header_row_parts = [] # List to build VIDEO header row dynamically
+    csv_header_csv = ["Timestamp", "Current (mA)", "Avg Current (mA)", "Voltage (mV)", "Power (W)", "Capacity (%)", "Battery Temperature (°C)"] # Base CSV header - always present
 
+
+    if DISPLAY_COLUMNS.get('Timestamp', False):
+        video_header_row_parts.append(f"{'Timestamp':<23} | ")
+    if DISPLAY_COLUMNS.get('Current (mA)', False):
+        video_header_row_parts.append(f"{'Current (mA)':>10} | ")
+    if DISPLAY_COLUMNS.get('ΔCurrent (mA)', False):
+        video_header_row_parts.append(f"{'ΔCurrent (mA)':>10} | ")
+    if DISPLAY_COLUMNS.get('Avg Current (mA)', False):
+        video_header_row_parts.append(f"{'Avg Current (mA)':>10} | ")
+    if DISPLAY_COLUMNS.get('ΔAvg Current (mA)', False):
+        video_header_row_parts.append(f"{'ΔAvg Current (mA)':>12} | ")
+    if DISPLAY_COLUMNS.get('Voltage (mV)', False):
+        video_header_row_parts.append(f"{'Voltage (mV)':>10} | ")
+    if DISPLAY_COLUMNS.get('ΔVoltage (mV)', False):
+        video_header_row_parts.append(f"{'ΔVoltage (mV)':>10} | ")
+    if DISPLAY_COLUMNS.get('Power (W)', False):
+        video_header_row_parts.append(f"{'Power (W)':>10} | ")
+    if DISPLAY_COLUMNS.get('ΔPower (W)', False):
+        video_header_row_parts.append(f"{'ΔPower (W)':>10} | ")
+    if DISPLAY_COLUMNS.get('Capacity (%)', False):
+        video_header_row_parts.append(f"{'Capacity (%)':>8} | ")
+    if DISPLAY_COLUMNS.get('Battery Temp (°C)', False):
+        video_header_row_parts.append(f"{'Battery Temp (°C)':>12} | ")
+
+
+    print("".join(video_header_row_parts), end="") # Print initial VIDEO header, sensor columns will be added later
+
+    thermal_sensor_names = [] # To store sensor names for header, will be populated in the loop
 
     previous_current_ua = None
-    previous_current_avg_ua = None # Track previous average current
+    previous_current_avg_ua = None
     previous_voltage_uv = None
-    previous_power_w = None # Track previous power (calculated)
-    previous_temp_celsius = None # Track previous temperature
+    previous_power_w = None
+    previous_temp_celsius = None
 
-
-    csv_filename = "battery_data_with_temp.csv"  # Default CSV filename - fallback
-    csv_file = None # Initialize csv_file outside the if block
-    csv_writer = None # Initialize csv_writer outside the if block
+    csv_filename = "battery_thermal_data.csv"
+    csv_file = None
+    csv_writer = None
 
     if ENABLE_LOGGING:
         device_model = get_device_model()
         device_serial = get_device_serial()
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-
         sanitized_model = sanitize_filename(device_model)
         sanitized_serial = sanitize_filename(device_serial)
-        csv_filename = f"battery_log_{sanitized_model}_{sanitized_serial}_{timestamp_str}.csv"
+        csv_filename = f"battery_thermal_log_{sanitized_model}_{sanitized_serial}_{timestamp_str}.csv"
 
+        csv_file = open(csv_filename, 'w', newline='')
+        csv_writer = csv.writer(csv_file)
+        # csv_header_csv is defined before the loop now
+        print(f"Logging data to: {csv_filename}")
 
-        csv_file = open(csv_filename, 'w', newline='') # Open CSV file in write mode if logging is enabled
-        csv_writer = csv.writer(csv_file) # Create CSV writer object
-        # Write header row to CSV - NO DELTA COLUMNS IN CSV
-        csv_writer.writerow(["Timestamp", "Current (mA)", "Avg Current (mA)", "Voltage (mV)", "Power (W)", "Capacity (%)", "Temperature (°C)"])
-        csv_file.flush() # Forza lo scaricamento del buffer dopo aver scritto l'header**
-        print(f"Logging data to: {csv_filename}") # Inform user about the log filename
-
+    first_iteration = True # Flag for the first iteration
 
     while True:
         current_now_str = get_battery_value("current_now")
-        current_avg_str = get_battery_value("current_avg") # Get average current
+        current_avg_str = get_battery_value("current_avg")
         voltage_now_str = get_battery_value("voltage_now")
-        capacity_str = get_battery_value("capacity") # Get capacity value
-        temp_celsius = get_battery_temperature() # Get battery temperature using dumpsys
+        capacity_str = get_battery_value("capacity")
+        temp_celsius = get_battery_temperature()
+        thermal_sensors = {} # Initialize as empty dictionary in case thermal sensors are disabled
+        if ENABLE_THERMAL_SENSORS: # <--- CONDITIONAL THERMAL SENSOR READING
+            thermal_output = get_temperature_data()
+            thermal_sensors = parse_temperature_output(thermal_output) if thermal_output else {}
 
-        if current_now_str is not None and current_avg_str is not None and voltage_now_str is not None and capacity_str is not None and temp_celsius is not None: # Check if temperature is also not None
+        if current_now_str is not None and current_avg_str is not None and voltage_now_str is not None and capacity_str is not None and temp_celsius is not None: # Thermal sensors are now optional in the main condition
             try:
-                current_ua = int(current_now_str)  # Current in microamps (instantaneous)
-                current_avg_ua = int(current_avg_str) # Average current in microamps
-                voltage_uv = int(voltage_now_str)  # Voltage in microvolts (instantaneous)
-                capacity_percent = int(capacity_str) # Capacity as percentage
+                current_ua = int(current_now_str)
+                current_avg_ua = int(current_avg_str)
+                voltage_uv = int(voltage_now_str)
+                capacity_percent = int(capacity_str)
 
-
-                current_ma = current_ua / 1000.0  # Convert instantaneous to milliamps for easier reading
-                current_avg_ma = current_avg_ua / 1000.0 # Convert average to milliamps
-                voltage_mv = voltage_uv / 1000.0  # Convert to millivolts for easier reading
-                power_w = voltage_mv/1000 * abs(current_ma/1000) # Power in Watts
-
+                current_ma = current_ua / 1000.0
+                current_avg_ma = current_avg_ua / 1000.0
+                voltage_mv = voltage_uv / 1000.0
+                power_w = (voltage_mv / 1000) * abs(current_ma / 1000)
 
                 current_delta_ma = None
-                current_avg_delta_ma = None # Delta for average current
+                current_avg_delta_ma = None
                 voltage_delta_mv = None
-                power_delta_mw = None # Delta for power
-                temp_delta_celsius = None # Delta for temperature
+                power_delta_mw = None
 
-
-                if previous_current_ua is not None and previous_current_avg_ua is not None and previous_voltage_uv is not None and previous_power_w is not None and previous_temp_celsius is not None: # Added check for previous_temp_celsius
+                if previous_current_ua is not None and previous_current_avg_ua is not None and previous_voltage_uv is not None and previous_power_w is not None:
                     current_delta_ma = (current_ua - previous_current_ua) / 1000.0
-                    current_avg_delta_ma = (current_avg_ua - previous_current_avg_ua) / 1000.0 # Calculate delta for average current
+                    current_avg_delta_ma = (current_avg_ua - previous_current_avg_ua) / 1000.0
                     voltage_delta_mv = (voltage_uv - previous_voltage_uv) / 1000.0
-                    power_delta_mw = power_w - previous_power_w # Calculate delta for power
-                    temp_delta_celsius = temp_celsius - previous_temp_celsius # Calculate delta for temperature
+                    power_delta_mw = power_w - previous_power_w
+
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+
+                print_output_parts = []
+
+                if DISPLAY_COLUMNS.get('Timestamp', False):
+                    print_output_parts.append(f"{timestamp:<23} | ")
+                if DISPLAY_COLUMNS.get('Current (mA)', False):
+                    print_output_parts.append(f"{current_ma:>10.2f} | ")
+                if DISPLAY_COLUMNS.get('ΔCurrent (mA)', False):
+                    if ENABLE_DELTA_COLUMNS and current_delta_ma is not None:
+                        print_output_parts.append(f"{current_delta_ma:>+10.2f} | ")
+                    elif ENABLE_DELTA_COLUMNS:
+                        print_output_parts.append(f"{'Initial':>10} | ")
+                if DISPLAY_COLUMNS.get('Avg Current (mA)', False):
+                    print_output_parts.append(f"{current_avg_ma:>10.2f} | ")
+                if DISPLAY_COLUMNS.get('ΔAvg Current (mA)', False):
+                    if ENABLE_DELTA_COLUMNS and current_avg_delta_ma is not None:
+                        print_output_parts.append(f"{current_avg_delta_ma:>+12.2f} | ")
+                    elif ENABLE_DELTA_COLUMNS:
+                        print_output_parts.append(f"{'Initial':>12} | ")
+                if DISPLAY_COLUMNS.get('Voltage (mV)', False):
+                    print_output_parts.append(f"{voltage_mv:>10.2f} | ")
+                if DISPLAY_COLUMNS.get('ΔVoltage (mV)', False):
+                    if ENABLE_DELTA_COLUMNS and voltage_delta_mv is not None:
+                        print_output_parts.append(f"{voltage_delta_mv:>+10.2f} | ")
+                    elif ENABLE_DELTA_COLUMNS:
+                        print_output_parts.append(f"{'Initial':>10} | ")
+                if DISPLAY_COLUMNS.get('Power (W)', False):
+                    print_output_parts.append(f"{power_w:>10.2f} | ")
+                if DISPLAY_COLUMNS.get('ΔPower (W)', False):
+                    if ENABLE_DELTA_COLUMNS and power_delta_mw is not None:
+                        print_output_parts.append(f"{power_delta_mw:>+10.2f} | ")
+                    elif ENABLE_DELTA_COLUMNS:
+                        print_output_parts.append(f"{'Initial':>10} | ")
+                if DISPLAY_COLUMNS.get('Capacity (%)', False):
+                    print_output_parts.append(f"{capacity_percent:>8}% | ")
+                if DISPLAY_COLUMNS.get('Battery Temp (°C)', False):
+                    print_output_parts.append(f"{temp_celsius:>12.2f}°C | ")
 
 
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") # Get timestamp with milliseconds
+                # Add thermal sensor values to output and header if it's the first iteration AND thermal sensors are enabled
+                if first_iteration and ENABLE_THERMAL_SENSORS: # <--- CHECK ENABLE_THERMAL_SENSORS HERE
+                    thermal_sensor_names = list(thermal_sensors.keys()) # Get sensor names for header
+                    video_header_sensors_row_parts = []
 
-                print_output = f"{timestamp:<23} | " # Timestamp (left aligned, width 23)
-                print_output += f"{current_ma:>10.2f} | " # Current Now (right aligned, width 10, 2 decimal places)
-                if ENABLE_DELTA_COLUMNS and current_delta_ma is not None:
-                    print_output += f"{current_delta_ma:>+10.2f} | " # Current Now Delta (right aligned, width 10, with sign, 2 decimal places)
-                elif ENABLE_DELTA_COLUMNS:
-                    print_output += f"{'Initial':>10} | " # Current Now Delta - Initial Value (right aligned, width 10)
-                print_output += f"{current_avg_ma:>10.2f} | " # Current Avg (right aligned, width 10, 2 decimal places)
-                if ENABLE_DELTA_COLUMNS and current_avg_delta_ma is not None:
-                    print_output += f"{current_avg_delta_ma:>+12.2f} | " # Current Avg Delta (right aligned, width 12, with sign, 2 decimal places)
-                elif ENABLE_DELTA_COLUMNS:
-                    print_output += f"{'Initial':>12} | " # Current Avg Delta - Initial Value (right aligned, width 12)
-                print_output += f"{voltage_mv:>10.2f} | " # Voltage Now (right aligned, width 10, 2 decimal places)
-                if ENABLE_DELTA_COLUMNS and voltage_delta_mv is not None:
-                    print_output += f"{voltage_delta_mv:>+10.2f} | " # Voltage Now Delta (right aligned, width 10, with sign, 2 decimal places)
-                elif ENABLE_DELTA_COLUMNS:
-                    print_output += f"{'Initial':>10} | " # Voltage Now Delta - Initial Value (right aligned, width 10)
-                print_output += f"{power_w:>10.2f} | " # Power Now (right aligned, width 10, 2 decimal places)
-                if ENABLE_DELTA_COLUMNS and power_delta_mw is not None:
-                    print_output += f"{power_delta_mw:>+10.2f} | " # Power Now Delta (right aligned, width 10, with sign, 2 decimal places)
-                elif ENABLE_DELTA_COLUMNS:
-                    print_output += f"{'Initial':>10} | " # Power Now Delta - Initial Value (right aligned, width 10)
-                print_output += f"{capacity_percent:>8}% | " # Capacity (right aligned, width 8)
-                print_output += f"{temp_celsius:>8.1f}°C" # Temperature (right aligned, width 8, 1 decimal place)
-                print(print_output)
+                    for sensor_name in thermal_sensor_names:
+                        sensor_header_name = sensor_name.replace("soc_", "").replace("_therm", "").replace("_throttling", "").title() # Simplify sensor name for header
+                        DISPLAY_COLUMNS[sensor_header_name] = DISPLAY_COLUMNS.get('Thermal Sensors', True) # Enable display based on 'Thermal Sensors' master switch or default to True
+                        if DISPLAY_COLUMNS.get(sensor_header_name, False): # Only add to video header if enabled in DISPLAY_COLUMNS
+                            video_header_sensors_row_parts.append(f"{sensor_header_name:>18} | ") # Adjust width as needed
+                        csv_header_csv.append(sensor_name) # Add full sensor name to CSV header - always log all sensors
 
+                    print("".join(video_header_sensors_row_parts)) # Print sensor headers for VIDEO after initial header
+                    print("-" * 200) # Separator after full header is printed
+                    if ENABLE_LOGGING and csv_writer is not None:
+                        csv_writer.writerow(csv_header_csv) # Write full CSV header including ALL sensors
+                        csv_file.flush() # Flush after writing header
+
+
+                sensor_values_output_parts = []
+                csv_row_data = [timestamp, f"{current_ma:.2f}", f"{current_avg_ma:.2f}", f"{voltage_mv:.2f}", f"{power_w:.2f}", capacity_percent, f"{temp_celsius:.2f}"] # Base CSV data, battery temp to 2 decimals as well
+                if ENABLE_THERMAL_SENSORS: # <--- CONDITIONAL THERMAL SENSOR OUTPUT AND CSV DATA
+                    for sensor_name in thermal_sensor_names: # Use names from the first iteration to maintain order
+                        sensor_value = thermal_sensors.get(sensor_name, "N/A") # Get value, default to "N/A" if not found
+                        sensor_header_name = sensor_name.replace("soc_", "").replace("_therm", "").replace("_throttling", "").title() # Simplify sensor name for header
+                        if DISPLAY_COLUMNS.get(sensor_header_name, False): # Only print to VIDEO if enabled in DISPLAY_COLUMNS
+                            sensor_values_output_parts.append(f"{sensor_value:>18.2f} | " if isinstance(sensor_value, float) else f"{str(sensor_value).rjust(18)} | ") # Format float or string - ALREADY FORMATTED TO 2 DECIMAL PLACES
+                        csv_row_data.append(sensor_value if isinstance(sensor_value, (int, float)) else str(sensor_value)) # Add to CSV row, keep numeric or string
+
+
+                print("".join(print_output_parts), end="") # Print battery and base temp data for VIDEO
+                print("".join(sensor_values_output_parts)) # Print thermal sensor values for VIDEO
 
                 if ENABLE_LOGGING and csv_writer is not None:
-                    # CSV WRITE - NO DELTA COLUMNS
-                    csv_writer.writerow([timestamp, f"{current_ma:.2f}", f"{current_avg_ma:.2f}", f"{voltage_mv:.2f}", f"{power_w:.2f}", capacity_percent, f"{temp_celsius:.1f}"])
-                    csv_file.flush() # Forza lo scaricamento del buffer dopo ogni riga di dati**
+                    csv_writer.writerow(csv_row_data)
+                    csv_file.flush()
 
-
-                previous_current_ua = current_ua  # Update previous current for next iteration
-                previous_current_avg_ua = current_avg_ua # Update previous average current
-                previous_voltage_uv = voltage_uv  # Update previous voltage for next iteration
-                previous_power_w = power_w # Update previous power for next iteration
-                previous_temp_celsius = temp_celsius # Update previous temperature
-
+                previous_current_ua = current_ua
+                previous_current_avg_ua = current_avg_ua
+                previous_voltage_uv = voltage_uv
+                previous_power_w = power_w
+                previous_temp_celsius = temp_celsius
+                first_iteration = False # Disable flag after first iteration - moved here to ensure header is written even if no thermal sensors are read in the first iteration when disabled
 
             except ValueError:
-                print("-" * 80) # Shorter separator for error messages
+                print("-" * 80)
                 print("Error: Could not convert value to integer. Raw values:")
-                print(f"  Current Now (raw):   {current_now_str}") # Tab for aligned error output
-                print(f"  Current Avg (raw):   {current_avg_str}") # Tab for aligned error output
-                print(f"  Voltage Now (raw):       {voltage_now_str}") # Tab for aligned error output
-                print(f"  Capacity (raw):      {capacity_str}") # Tab for aligned error output
-                print(f"  Temperature (raw):   {temp_celsius}") # Tab for aligned error output
+                print(f"  Current Now (raw):   {current_now_str}")
+                print(f"  Current Avg (raw):   {current_avg_str}")
+                print(f"  Voltage Now (raw):       {voltage_now_str}")
+                print(f"  Capacity (raw):      {capacity_str}")
+                print(f"  Battery Temperature (raw):   {temp_celsius}")
+                if ENABLE_THERMAL_SENSORS:
+                    print(f"  Thermal Sensors (raw):   {thermal_sensors}")
                 print("-" * 80)
         else:
-            print("-" * 80) # Shorter separator for error messages
-            print("Failed to read battery data (including temperature). Check ADB connection & device. Raw values:")
-            print(f"  Current Now (raw):   {current_now_str}") # Tab for aligned error output
-            print(f"  Current Avg (raw):   {current_avg_str}") # Tab for aligned error output
-            print(f"  Voltage Now (raw):       {voltage_now_str}") # Tab for aligned error output
-            print(f"  Capacity (raw):      {capacity_str}") # Tab for aligned error output
-            print(f"  Temperature (raw):   {temp_celsius}") # Tab for aligned error output
             print("-" * 80)
-
+            print("Failed to read battery and/or thermal data. Check ADB connection & device. Raw values:")
+            print(f"  Current Now (raw):   {current_now_str}")
+            print(f"  Current Avg (raw):   {current_avg_str}")
+            print(f"  Voltage Now (raw):       {voltage_now_str}")
+            print(f"  Capacity (raw):      {capacity_str}")
+            print(f"  Battery Temperature (raw):   {temp_celsius}")
+            if ENABLE_THERMAL_SENSORS:
+                print(f"  Thermal Sensors (raw):   {thermal_sensors}")
+            print("-" * 80)
 
         time.sleep(T_sleep)
 
-    # In a real application where the loop might terminate, you should close the file:
-    # This part is not reached in this infinite loop, but good practice for other scripts.
     if ENABLE_LOGGING and csv_file is not None:
         csv_file.close()

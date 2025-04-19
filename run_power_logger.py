@@ -4,7 +4,7 @@ import csv  # Import the csv module
 from datetime import datetime  # Import datetime for timestamps
 
 T_sleep = 1.0  # Sleep time in seconds (variable)
-ENABLE_LOGGING = False  # Hardcoded variable to enable/disable CSV logging (True to enable, False to disable)
+ENABLE_LOGGING = True  # Hardcoded variable to enable/disable CSV logging (True to enable, False to disable)
 
 def get_battery_value(property_name):
     """
@@ -37,68 +37,116 @@ def get_battery_value(property_name):
         print(f"An unexpected error occurred: {e}")
         return None
 
+def get_battery_temperature():
+    """
+    Reads battery temperature using `dumpsys battery | grep temp`.
+    Temperature is typically in tenths of a degree Celsius.
+    """
+    try:
+        process = subprocess.run(
+            ["./adb", "shell", "dumpsys battery | grep temp"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        output = process.stdout.strip()
+        # Example output:   temperature: 280
+        parts = output.split(':') # Split by colon
+        if len(parts) > 1:
+            temp_str = parts[1].strip() # Take the part after the colon and remove whitespace
+            try:
+                temp_tenths_celsius = int(temp_str)
+                temp_celsius = temp_tenths_celsius / 10.0 # Convert to Celsius
+                return temp_celsius
+            except ValueError:
+                print(f"Warning: Could not convert temperature value to float: {temp_str}")
+                return None
+        else:
+            print(f"Warning: Unexpected output format for temperature: {output}")
+            return None
+
+    except subprocess.CalledProcessError as e:
+        print(f"Error reading battery temperature: ADB command failed with error code {e.returncode}")
+        print(f"Stderr: {e.stderr}")
+        return None
+    except FileNotFoundError:
+        print("Error: ./adb command not found for battery temperature. Make sure ADB is in the current directory and executable, or in your PATH.")
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred while reading battery temperature: {e}")
+        return None
+
+
 if __name__ == "__main__":
-    print("-" * 140) # Increased separator width for fixed width output
-    print("Real-time Battery Monitoring Script with Calculated Power (Fixed-Width Output)")
-    print("-" * 140)
+    print("-" * 160) # Increased separator width
+    print("Real-time Battery Monitoring Script with Temperature (Fixed-Width Output)") # Updated title
+    print("-" * 160)
     print(f"Polling Interval: {T_sleep:.2f} seconds")
     print(f"Logging to CSV:   {'Enabled' if ENABLE_LOGGING else 'Disabled'}")
-    print("-" * 140)
+    print("-" * 160)
     print("Press Ctrl+C to stop")
-    print("-" * 140)
-    print(f"{'Timestamp':<23} | {'Current (mA)':>10} | {'ΔCurrent (mA)':>10} | {'Avg Current (mA)':>10} | {'ΔAvg Current (mA)':>12} | {'Voltage (mV)':>10} | {'ΔVoltage (mV)':>10} | {'Power (W)':>10} | {'ΔPower (W)':>10} | {'Capacity (%)':>8}") # Header row with fixed widths and shorter units
-    print("-" * 140)
+    print("-" * 160)
+    print(f"{'Timestamp':<23} | {'Current (mA)':>10} | {'ΔCurrent (mA)':>10} | {'Avg Current (mA)':>10} | {'ΔAvg Current (mA)':>12} | {'Voltage (mV)':>10} | {'ΔVoltage (mV)':>10} | {'Power (W)':>10} | {'ΔPower (W)':>10} | {'Capacity (%)':>8} | {'Temp (°C)':>8}") # Header row with temperature
+    print("-" * 160)
 
 
     previous_current_ua = None
     previous_current_avg_ua = None # Track previous average current
     previous_voltage_uv = None
-    previous_power_w = None # Track previous power (calculated) - now tracking mW directly
+    previous_power_w = None # Track previous power (calculated)
+    previous_temp_celsius = None # Track previous temperature
 
-    csv_filename = "battery_data.csv"  # Name of the CSV file
+
+    csv_filename = "battery_data_with_temp.csv"  # New CSV filename
     csv_file = None # Initialize csv_file outside the if block
     csv_writer = None # Initialize csv_writer outside the if block
 
     if ENABLE_LOGGING:
         csv_file = open(csv_filename, 'w', newline='') # Open CSV file in write mode if logging is enabled
         csv_writer = csv.writer(csv_file) # Create CSV writer object
-        # Write header row to CSV with shorter units
-        csv_writer.writerow(["Timestamp", "Current (mA)", "Current Δ (mA)", "Avg Current (mA)", "Avg Current Δ (mA)", "Voltage (mV)", "Voltage Δ (mV)", "Power (mW)", "Power Δ (W)", "Capacity (%)"])
+        # Write header row to CSV with temperature
+        csv_writer.writerow(["Timestamp", "Current (mA)", "Current Δ (mA)", "Avg Current (mA)", "Avg Current Δ (mA)", "Voltage (mV)", "Voltage Δ (mV)", "Power (mW)", "Power Δ (W)", "Capacity (%)", "Temperature (°C)"])
+        csv_file.flush() # Forza lo scaricamento del buffer dopo aver scritto l'header**
 
     while True:
         current_now_str = get_battery_value("current_now")
         current_avg_str = get_battery_value("current_avg") # Get average current
         voltage_now_str = get_battery_value("voltage_now")
         capacity_str = get_battery_value("capacity") # Get capacity value
+        temp_celsius = get_battery_temperature() # Get battery temperature using dumpsys
 
-        if current_now_str is not None and current_avg_str is not None and voltage_now_str is not None and capacity_str is not None:
+        if current_now_str is not None and current_avg_str is not None and voltage_now_str is not None and capacity_str is not None and temp_celsius is not None: # Check if temperature is also not None
             try:
                 current_ua = int(current_now_str)  # Current in microamps (instantaneous)
                 current_avg_ua = int(current_avg_str) # Average current in microamps
                 voltage_uv = int(voltage_now_str)  # Voltage in microvolts (instantaneous)
                 capacity_percent = int(capacity_str) # Capacity as percentage
 
+
                 current_ma = current_ua / 1000.0  # Convert instantaneous to milliamps for easier reading
                 current_avg_ma = current_avg_ua / 1000.0 # Convert average to milliamps
                 voltage_mv = voltage_uv / 1000.0  # Convert to millivolts for easier reading
+                power_w = voltage_mv/1000 * abs(current_ma/1000) # Power in Watts
 
-                # Calculate power in milliwatts (mW) - Corrected calculation
-                power_w = voltage_mv/1000 * abs(current_ma/1000)
 
                 current_delta_ma = None
                 current_avg_delta_ma = None # Delta for average current
                 voltage_delta_mv = None
                 power_delta_mw = None # Delta for power
+                temp_delta_celsius = None # Delta for temperature
 
-                if previous_current_ua is not None and previous_current_avg_ua is not None and previous_voltage_uv is not None and previous_power_w is not None: # Changed to previous_power_w
+
+                if previous_current_ua is not None and previous_current_avg_ua is not None and previous_voltage_uv is not None and previous_power_w is not None and previous_temp_celsius is not None: # Added check for previous_temp_celsius
                     current_delta_ma = (current_ua - previous_current_ua) / 1000.0
                     current_avg_delta_ma = (current_avg_ua - previous_current_avg_ua) / 1000.0 # Calculate delta for average current
                     voltage_delta_mv = (voltage_uv - previous_voltage_uv) / 1000.0
-                    power_delta_mw = power_w - previous_power_w # Calculate delta for power - now using mW directly
+                    power_delta_mw = power_w - previous_power_w # Calculate delta for power
+                    temp_delta_celsius = temp_celsius - previous_temp_celsius # Calculate delta for temperature
+
 
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") # Get timestamp with milliseconds
 
-                if current_delta_ma is not None and current_avg_delta_ma is not None and voltage_delta_mv is not None and power_delta_mw is not None:
+                if current_delta_ma is not None and current_avg_delta_ma is not None and voltage_delta_mv is not None and power_delta_mw is not None and temp_delta_celsius is not None: # Added check for temp_delta_celsius
                     print_output = f"{timestamp:<23} | " # Timestamp (left aligned, width 23)
                     print_output += f"{current_ma:>10.2f} | " # Current Now (right aligned, width 10, 2 decimal places)
                     print_output += f"{current_delta_ma:>+10.2f} | " # Current Now Delta (right aligned, width 10, with sign, 2 decimal places)
@@ -108,11 +156,13 @@ if __name__ == "__main__":
                     print_output += f"{voltage_delta_mv:>+10.2f} | " # Voltage Now Delta (right aligned, width 10, with sign, 2 decimal places)
                     print_output += f"{power_w:>10.2f} | " # Power Now (right aligned, width 10, 2 decimal places)
                     print_output += f"{power_delta_mw:>+10.2f} | " # Power Now Delta (right aligned, width 10, with sign, 2 decimal places)
-                    print_output += f"{capacity_percent:>8}%" # Capacity (right aligned, width 8)
+                    print_output += f"{capacity_percent:>8}% | " # Capacity (right aligned, width 8)
+                    print_output += f"{temp_celsius:>8.1f}°C" # Temperature (right aligned, width 8, 1 decimal place)
                     print(print_output)
 
                     if ENABLE_LOGGING and csv_writer is not None:
-                        csv_writer.writerow([timestamp, f"{current_ma:.2f}", f"{current_delta_ma:.2f}", f"{current_avg_ma:.2f}", f"{current_avg_delta_ma:.2f}", f"{voltage_mv:.2f}", f"{voltage_delta_mv:.2f}", f"{power_w:.2f}", f"{power_delta_mw:.2f}", capacity_percent]) # Write row to CSV
+                        csv_writer.writerow([timestamp, f"{current_ma:.2f}", f"{current_delta_ma:.2f}", f"{current_avg_ma:.2f}", f"{current_avg_delta_ma:.2f}", f"{voltage_mv:.2f}", f"{voltage_delta_mv:.2f}", f"{power_w:.2f}", f"{power_delta_mw:.2f}", capacity_percent, f"{temp_celsius:.1f}"]) # Write row to CSV with temperature
+                        csv_file.flush() # Forza lo scaricamento del buffer dopo ogni riga di dati**
                 else:
                     print_output = f"{timestamp:<23} | " # Timestamp (left aligned, width 23)
                     print_output += f"{current_ma:>10.2f} | " # Current Now (right aligned, width 10, 2 decimal places)
@@ -123,16 +173,19 @@ if __name__ == "__main__":
                     print_output += f"{'Initial':>10} | " # Voltage Now Delta - Initial Value (right aligned, width 10)
                     print_output += f"{power_w:>10.2f} | " # Power Now (right aligned, width 10, 2 decimal places)
                     print_output += f"{'Initial':>10} | " # Power Now Delta - Initial Value (right aligned, width 10)
-                    print_output += f"{capacity_percent:>8}%" # Capacity (right aligned, width 8)
+                    print_output += f"{capacity_percent:>8}% | " # Capacity (right aligned, width 8)
+                    print_output += f"{temp_celsius:>8.1f}°C" # Temperature (right aligned, width 8, 1 decimal place)
                     print(print_output)
 
                     if ENABLE_LOGGING and csv_writer is not None:
-                        csv_writer.writerow([timestamp, f"{current_ma:.2f}", "", f"{current_avg_ma:.2f}", "", f"{voltage_mv:.2f}", "", f"{power_w:.2f}", "", capacity_percent]) # Write initial value row to CSV (empty delta columns)
+                        csv_writer.writerow([timestamp, f"{current_ma:.2f}", "", f"{current_avg_ma:.2f}", "", f"{voltage_mv:.2f}", "", f"{power_w:.2f}", "", capacity_percent, f"{temp_celsius:.1f}"]) # Write initial value row to CSV (empty delta columns) with temperature
+                        csv_file.flush() # Forza lo scaricamento del buffer anche per la riga iniziale**
 
                 previous_current_ua = current_ua  # Update previous current for next iteration
                 previous_current_avg_ua = current_avg_ua # Update previous average current
                 previous_voltage_uv = voltage_uv  # Update previous voltage for next iteration
-                previous_power_w = power_w # Update previous power for next iteration - now storing mW
+                previous_power_w = power_w # Update previous power for next iteration
+                previous_temp_celsius = temp_celsius # Update previous temperature
 
 
             except ValueError:
@@ -142,14 +195,16 @@ if __name__ == "__main__":
                 print(f"  Current Avg (raw):   {current_avg_str}") # Tab for aligned error output
                 print(f"  Voltage Now (raw):       {voltage_now_str}") # Tab for aligned error output
                 print(f"  Capacity (raw):      {capacity_str}") # Tab for aligned error output
+                print(f"  Temperature (raw):   {temp_celsius}") # Tab for aligned error output
                 print("-" * 80)
         else:
             print("-" * 80) # Shorter separator for error messages
-            print("Failed to read battery data. Check ADB connection & device. Raw values:")
+            print("Failed to read battery data (including temperature). Check ADB connection & device. Raw values:")
             print(f"  Current Now (raw):   {current_now_str}") # Tab for aligned error output
             print(f"  Current Avg (raw):   {current_avg_str}") # Tab for aligned error output
             print(f"  Voltage Now (raw):       {voltage_now_str}") # Tab for aligned error output
             print(f"  Capacity (raw):      {capacity_str}") # Tab for aligned error output
+            print(f"  Temperature (raw):   {temp_celsius}") # Tab for aligned error output
             print("-" * 80)
 
 

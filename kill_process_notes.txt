@@ -1,5 +1,2 @@
 ./adb shell "pm list packages -d | while read package; do pm disable \$package; done"
-./adb shell "pm list packages -d | while read package; do am force-stoop \$package; done"
-./adb shell "pm list packages -d | while read package; do am force-stop \$package; done"
-./adb shell "pm list packages -d | while read package; do am force-stop -v \$package; done"
 ./adb shell "pm list packages -d | while read package; do am force-stop \$package; done"

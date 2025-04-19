@@ -2,9 +2,11 @@ import subprocess
 import time
 import csv  # Import the csv module
 from datetime import datetime  # Import datetime for timestamps
+import re # Import regular expression module
 
 T_sleep = 1.0  # Sleep time in seconds (variable)
 ENABLE_LOGGING = True  # Hardcoded variable to enable/disable CSV logging (True to enable, False to disable)
+ENABLE_DELTA_COLUMNS = False  # Flag to enable/disable delta columns in output (True to enable, False to disable)
 
 def get_battery_value(property_name):
     """
@@ -76,6 +78,60 @@ def get_battery_temperature():
         print(f"An unexpected error occurred while reading battery temperature: {e}")
         return None
 
+def get_device_model():
+    """
+    Retrieves the device model using `adb shell getprop ro.product.model`.
+    """
+    try:
+        process = subprocess.run(
+            ["./adb", "shell", "getprop ro.product.model"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        model = process.stdout.strip()
+        return model
+    except subprocess.CalledProcessError as e:
+        print(f"Error getting device model: ADB command failed with error code {e.returncode}")
+        print(f"Stderr: {e.stderr}")
+        return "UNKNOWN_MODEL"
+    except FileNotFoundError:
+        print("Error: ./adb command not found for getting device model.")
+        return "UNKNOWN_MODEL"
+    except Exception as e:
+        print(f"An unexpected error occurred while getting device model: {e}")
+        return "UNKNOWN_MODEL"
+
+def get_device_serial():
+    """
+    Retrieves the device serial number using `adb get-serialno`.
+    """
+    try:
+        process = subprocess.run(
+            ["./adb", "get-serialno"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        serial = process.stdout.strip()
+        return serial
+    except subprocess.CalledProcessError as e:
+        print(f"Error getting device serial: ADB command failed with error code {e.returncode}")
+        print(f"Stderr: {e.stderr}")
+        return "UNKNOWN_SERIAL"
+    except FileNotFoundError:
+        print("Error: ./adb command not found for getting device serial.")
+        return "UNKNOWN_SERIAL"
+    except Exception as e:
+        print(f"An unexpected error occurred while getting device serial: {e}")
+        return "UNKNOWN_SERIAL"
+
+def sanitize_filename(filename):
+    """
+    Sanitizes a filename by replacing invalid characters with underscores.
+    """
+    return re.sub(r'[^\w\-_\.]', '_', filename) # Keep alphanumeric, underscore, hyphen, dot
+
 
 if __name__ == "__main__":
     print("-" * 160) # Increased separator width
@@ -83,10 +139,25 @@ if __name__ == "__main__":
     print("-" * 160)
     print(f"Polling Interval: {T_sleep:.2f} seconds")
     print(f"Logging to CSV:   {'Enabled' if ENABLE_LOGGING else 'Disabled'}")
+    print(f"Delta Columns:    {'Enabled' if ENABLE_DELTA_COLUMNS else 'Disabled'}") # Added delta columns status
     print("-" * 160)
     print("Press Ctrl+C to stop")
     print("-" * 160)
-    print(f"{'Timestamp':<23} | {'Current (mA)':>10} | {'ΔCurrent (mA)':>10} | {'Avg Current (mA)':>10} | {'ΔAvg Current (mA)':>12} | {'Voltage (mV)':>10} | {'ΔVoltage (mV)':>10} | {'Power (W)':>10} | {'ΔPower (W)':>10} | {'Capacity (%)':>8} | {'Temp (°C)':>8}") # Header row with temperature
+
+    header_row = f"{'Timestamp':<23} | {'Current (mA)':>10} | "
+    if ENABLE_DELTA_COLUMNS:
+        header_row += f"{'ΔCurrent (mA)':>10} | "
+    header_row += f"{'Avg Current (mA)':>10} | "
+    if ENABLE_DELTA_COLUMNS:
+        header_row += f"{'ΔAvg Current (mA)':>12} | "
+    header_row += f"{'Voltage (mV)':>10} | "
+    if ENABLE_DELTA_COLUMNS:
+        header_row += f"{'ΔVoltage (mV)':>10} | "
+    header_row += f"{'Power (W)':>10} | "
+    if ENABLE_DELTA_COLUMNS:
+        header_row += f"{'ΔPower (W)':>10} | "
+    header_row += f"{'Capacity (%)':>8} | {'Temp (°C)':>8}"
+    print(header_row)
     print("-" * 160)
 
 
@@ -97,16 +168,27 @@ if __name__ == "__main__":
     previous_temp_celsius = None # Track previous temperature
 
 
-    csv_filename = "battery_data_with_temp.csv"  # New CSV filename
+    csv_filename = "battery_data_with_temp.csv"  # Default CSV filename - fallback
     csv_file = None # Initialize csv_file outside the if block
     csv_writer = None # Initialize csv_writer outside the if block
 
     if ENABLE_LOGGING:
+        device_model = get_device_model()
+        device_serial = get_device_serial()
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        sanitized_model = sanitize_filename(device_model)
+        sanitized_serial = sanitize_filename(device_serial)
+        csv_filename = f"battery_log_{sanitized_model}_{sanitized_serial}_{timestamp_str}.csv"
+
+
         csv_file = open(csv_filename, 'w', newline='') # Open CSV file in write mode if logging is enabled
         csv_writer = csv.writer(csv_file) # Create CSV writer object
-        # Write header row to CSV with temperature
-        csv_writer.writerow(["Timestamp", "Current (mA)", "Current Δ (mA)", "Avg Current (mA)", "Avg Current Δ (mA)", "Voltage (mV)", "Voltage Δ (mV)", "Power (mW)", "Power Δ (W)", "Capacity (%)", "Temperature (°C)"])
+        # Write header row to CSV - NO DELTA COLUMNS IN CSV
+        csv_writer.writerow(["Timestamp", "Current (mA)", "Avg Current (mA)", "Voltage (mV)", "Power (W)", "Capacity (%)", "Temperature (°C)"])
         csv_file.flush() # Forza lo scaricamento del buffer dopo aver scritto l'header**
+        print(f"Logging data to: {csv_filename}") # Inform user about the log filename
+
 
     while True:
         current_now_str = get_battery_value("current_now")
@@ -146,40 +228,37 @@ if __name__ == "__main__":
 
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") # Get timestamp with milliseconds
 
-                if current_delta_ma is not None and current_avg_delta_ma is not None and voltage_delta_mv is not None and power_delta_mw is not None and temp_delta_celsius is not None: # Added check for temp_delta_celsius
-                    print_output = f"{timestamp:<23} | " # Timestamp (left aligned, width 23)
-                    print_output += f"{current_ma:>10.2f} | " # Current Now (right aligned, width 10, 2 decimal places)
+                print_output = f"{timestamp:<23} | " # Timestamp (left aligned, width 23)
+                print_output += f"{current_ma:>10.2f} | " # Current Now (right aligned, width 10, 2 decimal places)
+                if ENABLE_DELTA_COLUMNS and current_delta_ma is not None:
                     print_output += f"{current_delta_ma:>+10.2f} | " # Current Now Delta (right aligned, width 10, with sign, 2 decimal places)
-                    print_output += f"{current_avg_ma:>10.2f} | " # Current Avg (right aligned, width 10, 2 decimal places)
-                    print_output += f"{current_avg_delta_ma:>+12.2f} | " # Current Avg Delta (right aligned, width 12, with sign, 2 decimal places)
-                    print_output += f"{voltage_mv:>10.2f} | " # Voltage Now (right aligned, width 10, 2 decimal places)
-                    print_output += f"{voltage_delta_mv:>+10.2f} | " # Voltage Now Delta (right aligned, width 10, with sign, 2 decimal places)
-                    print_output += f"{power_w:>10.2f} | " # Power Now (right aligned, width 10, 2 decimal places)
-                    print_output += f"{power_delta_mw:>+10.2f} | " # Power Now Delta (right aligned, width 10, with sign, 2 decimal places)
-                    print_output += f"{capacity_percent:>8}% | " # Capacity (right aligned, width 8)
-                    print_output += f"{temp_celsius:>8.1f}°C" # Temperature (right aligned, width 8, 1 decimal place)
-                    print(print_output)
-
-                    if ENABLE_LOGGING and csv_writer is not None:
-                        csv_writer.writerow([timestamp, f"{current_ma:.2f}", f"{current_delta_ma:.2f}", f"{current_avg_ma:.2f}", f"{current_avg_delta_ma:.2f}", f"{voltage_mv:.2f}", f"{voltage_delta_mv:.2f}", f"{power_w:.2f}", f"{power_delta_mw:.2f}", capacity_percent, f"{temp_celsius:.1f}"]) # Write row to CSV with temperature
-                        csv_file.flush() # Forza lo scaricamento del buffer dopo ogni riga di dati**
-                else:
-                    print_output = f"{timestamp:<23} | " # Timestamp (left aligned, width 23)
-                    print_output += f"{current_ma:>10.2f} | " # Current Now (right aligned, width 10, 2 decimal places)
+                elif ENABLE_DELTA_COLUMNS:
                     print_output += f"{'Initial':>10} | " # Current Now Delta - Initial Value (right aligned, width 10)
-                    print_output += f"{current_avg_ma:>10.2f} | " # Current Avg (right aligned, width 10, 2 decimal places)
+                print_output += f"{current_avg_ma:>10.2f} | " # Current Avg (right aligned, width 10, 2 decimal places)
+                if ENABLE_DELTA_COLUMNS and current_avg_delta_ma is not None:
+                    print_output += f"{current_avg_delta_ma:>+12.2f} | " # Current Avg Delta (right aligned, width 12, with sign, 2 decimal places)
+                elif ENABLE_DELTA_COLUMNS:
                     print_output += f"{'Initial':>12} | " # Current Avg Delta - Initial Value (right aligned, width 12)
-                    print_output += f"{voltage_mv:>10.2f} | " # Voltage Now (right aligned, width 10, 2 decimal places)
+                print_output += f"{voltage_mv:>10.2f} | " # Voltage Now (right aligned, width 10, 2 decimal places)
+                if ENABLE_DELTA_COLUMNS and voltage_delta_mv is not None:
+                    print_output += f"{voltage_delta_mv:>+10.2f} | " # Voltage Now Delta (right aligned, width 10, with sign, 2 decimal places)
+                elif ENABLE_DELTA_COLUMNS:
                     print_output += f"{'Initial':>10} | " # Voltage Now Delta - Initial Value (right aligned, width 10)
-                    print_output += f"{power_w:>10.2f} | " # Power Now (right aligned, width 10, 2 decimal places)
+                print_output += f"{power_w:>10.2f} | " # Power Now (right aligned, width 10, 2 decimal places)
+                if ENABLE_DELTA_COLUMNS and power_delta_mw is not None:
+                    print_output += f"{power_delta_mw:>+10.2f} | " # Power Now Delta (right aligned, width 10, with sign, 2 decimal places)
+                elif ENABLE_DELTA_COLUMNS:
                     print_output += f"{'Initial':>10} | " # Power Now Delta - Initial Value (right aligned, width 10)
-                    print_output += f"{capacity_percent:>8}% | " # Capacity (right aligned, width 8)
-                    print_output += f"{temp_celsius:>8.1f}°C" # Temperature (right aligned, width 8, 1 decimal place)
-                    print(print_output)
+                print_output += f"{capacity_percent:>8}% | " # Capacity (right aligned, width 8)
+                print_output += f"{temp_celsius:>8.1f}°C" # Temperature (right aligned, width 8, 1 decimal place)
+                print(print_output)
 
-                    if ENABLE_LOGGING and csv_writer is not None:
-                        csv_writer.writerow([timestamp, f"{current_ma:.2f}", "", f"{current_avg_ma:.2f}", "", f"{voltage_mv:.2f}", "", f"{power_w:.2f}", "", capacity_percent, f"{temp_celsius:.1f}"]) # Write initial value row to CSV (empty delta columns) with temperature
-                        csv_file.flush() # Forza lo scaricamento del buffer anche per la riga iniziale**
+
+                if ENABLE_LOGGING and csv_writer is not None:
+                    # CSV WRITE - NO DELTA COLUMNS
+                    csv_writer.writerow([timestamp, f"{current_ma:.2f}", f"{current_avg_ma:.2f}", f"{voltage_mv:.2f}", f"{power_w:.2f}", capacity_percent, f"{temp_celsius:.1f}"])
+                    csv_file.flush() # Forza lo scaricamento del buffer dopo ogni riga di dati**
+
 
                 previous_current_ua = current_ua  # Update previous current for next iteration
                 previous_current_avg_ua = current_avg_ua # Update previous average current

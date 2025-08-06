@@ -16,6 +16,9 @@ https://github.com/davidBar-On/android-iperf3/raw/refs/heads/gh-pages/libs/arm64
 
 ./adb push ./iperf3.18 /data/local/tmp/ 
 
+### config iperf in execution 
+./adb shell chmod +x /data/local/tmp/iperf3.18
+
 ### RUN IPERF CLIENT on UE
 
 ./adb shell /data/local/tmp/iperf3.18 -c 10.45.0.1 -i1 -b1000M -u -t1000

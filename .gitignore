@@ -2,3 +2,4 @@
 adb
 platform-tools*
 iperf*
+.DS_Store
